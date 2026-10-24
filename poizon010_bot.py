@@ -17,8 +17,8 @@ from aiogram.types import (
 import aiosqlite
 from aiohttp import web
 
-BOT_TOKEN = "8816444631:AAEj2JoljUfk2T2pg_VcxFRzlMMDaUINQnU"
-ADMIN_ID = 1681547868  # Твой числовой Telegram ID
+BOT_TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН_БОТА"
+ADMIN_ID = 123456789  # ВПИШИ СЮДА СВОЙ ЧИСЛОВОЙ ID БЕЗ КАВЫЧЕК
 CHANNEL_URL = "https://t.me/poizonstore010"
 
 logging.basicConfig(level=logging.INFO)
@@ -84,12 +84,36 @@ async def init_db():
 
 
 async def log_action(user_id: int, action: str, details: str = ""):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 1. Запись в локальную базу данных
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
             "INSERT INTO logs (user_id, action, details, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, action, details, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            (user_id, action, details, now_str)
         )
         await db.commit()
+
+    # 2. Моментальное уведомление админу в личку (только если действие совершил НЕ сам админ)
+    if user_id != ADMIN_ID:
+        action_names = {
+            "start": "🚀 Запустил бота",
+            "set_city": "📍 Выбрал город",
+            "calc": "🧮 Рассчитал стоимость",
+            "order": "📦 Отправил заявку на выкуп"
+        }
+        name = action_names.get(action, f"Действие: {action}")
+        msg = (
+            f"🔔 **Активность клиента!**\n\n"
+            f"👤 ID: `{user_id}`\n"
+            f"⚡ Событие: **{name}**\n"
+            f"ℹ️ Детали: `{details}`\n"
+            f"⏰ Время: {now_str[11:16]}"
+        )
+        try:
+            await bot.send_message(ADMIN_ID, msg, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Не удалось отправить уведомление админу: {e}")
 
 
 async def get_settings():
@@ -369,6 +393,15 @@ async def process_order_size(message: Message, state: FSMContext):
     user = message.from_user
     username = f"@{user.username}" if user.username else f"id: {user.id}"
 
+    # Отправляем заказчику подтверждение
+    await log_action(user.id, "order", f"Заказ: {link[:25]} | {size}")
+    await message.answer(
+        "✅ **Заявка принята!**\n\n"
+        "Мы проверим актуальную стоимость выкупа, наличие у продавца и напишем вам в личные сообщения для подтверждения заказа.",
+        parse_mode="Markdown"
+    )
+
+    # Дублируем заказ в личку админу
     order_notification = (
         f"🔥 **НОВАЯ ЗАЯВКА НА ВЫКУП!**\n\n"
         f"👤 Клиент: {user.full_name} ({username})\n"
@@ -381,13 +414,6 @@ async def process_order_size(message: Message, state: FSMContext):
         await bot.send_message(ADMIN_ID, order_notification, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Сбой отправки админу: {e}")
-
-    await log_action(user.id, "order", f"Заказ: {link[:25]} | {size}")
-    await message.answer(
-        "✅ **Заявка принята!**\n\n"
-        "Мы проверим актуальную стоимость выкупа, наличие у продавца и напишем вам в личные сообщения для подтверждения заказа.",
-        parse_mode="Markdown"
-    )
 
 
 # --- ОТКУДА ДОСТАВЛЯЕМ (СПРАВКА ПО ПЛОЩАДКАМ) ---
