@@ -18,23 +18,26 @@ import aiosqlite
 from aiohttp import web
 
 BOT_TOKEN = "8816444631:AAEj2JoljUfk2T2pg_VcxFRzlMMDaUINQnU"
-ADMIN_ID = 1681547868  # Твой числовой Telegram ID
-CHANNEL_URL = "https://t.me/poizon010"
+ADMIN_ID = 1681547868  # Твой числовой Telegram ID (узнать в @userinfobot)
+CHANNEL_URL = "https://t.me/poizonstore010"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_FILE = "poizon010.db"
 
+
 # --- FSM СОСТОЯНИЯ ---
 class CalcState(StatesGroup):
     waiting_for_price = State()
     waiting_for_weight = State()
 
+
 class AdminState(StatesGroup):
     waiting_for_rate = State()
     waiting_for_delivery_price = State()
     waiting_for_custom_percent = State()
+
 
 class OrderState(StatesGroup):
     waiting_for_link = State()
@@ -107,22 +110,31 @@ async def update_setting(key: str, value):
         await db.commit()
 
 
-# --- КЛАВИАТУРЫ ---
-def get_main_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🧮 Рассчитать стоимость"), KeyboardButton(text="📦 Оформить заказ")],
-            [KeyboardButton(text="📏 Таблица размеров"), KeyboardButton(text="⚖️ Примерный вес вещей")],
-            [KeyboardButton(text="📍 Сменить город"), KeyboardButton(text="📢 Наш канал")]
-        ],
-        resize_keyboard=True
-    )
+# --- ГЛАВНЫЕ КЛАВИАТУРЫ ---
+def get_main_kb(user_id: int):
+    buttons = [
+        [KeyboardButton(text="🧮 Рассчитать стоимость"), KeyboardButton(text="📦 Оформить заказ")],
+        [KeyboardButton(text="📏 Таблица размеров"), KeyboardButton(text="⚖️ Примерный вес вещей")],
+        [KeyboardButton(text="📍 Сменить город"), KeyboardButton(text="📢 Наш канал")]
+    ]
+    if user_id == ADMIN_ID:
+        buttons.append([KeyboardButton(text="👑 Админ-панель")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
 def get_city_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📍 Ижевск (Самовывоз / Без СДЭК)", callback_data="set_city_izhevsk")],
         [InlineKeyboardButton(text="🚚 Другой город РФ (Доставка СДЭК)", callback_data="set_city_other")]
+    ])
+
+
+def get_sizes_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👟 Nike / Jordan", callback_data="size_nike"),
+         InlineKeyboardButton(text="👟 Adidas / Yeezy", callback_data="size_adidas")],
+        [InlineKeyboardButton(text="👟 New Balance", callback_data="size_nb"),
+         InlineKeyboardButton(text="👕 Одежда (Верх/Низ)", callback_data="size_clothes")]
     ])
 
 
@@ -136,23 +148,23 @@ def get_admin_kb(settings):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💱 Курс юаня: {settings['cny_rate']} ₽", callback_data="adm_rate")],
         [InlineKeyboardButton(text=f"✈️ Доставка/кг: {settings['delivery_per_kg']} ₽", callback_data="adm_deliv")],
-        [InlineKeyboardButton(text=f"📊 Режим наценки: {mode_names.get(settings['margin_mode'])}", callback_data="adm_modes")],
-        [InlineKeyboardButton(text="📈 Логи активности", callback_data="adm_logs")],
-        [InlineKeyboardButton(text="👥 Пользователи", callback_data="adm_users_count")]
+        [InlineKeyboardButton(text=f"📊 Наценка: {mode_names.get(settings['margin_mode'])}", callback_data="adm_modes")],
+        [InlineKeyboardButton(text="📈 Логи (посл. 10)", callback_data="adm_logs"),
+         InlineKeyboardButton(text="👥 Пользователи", callback_data="adm_users_count")]
     ])
 
 
 def get_margin_modes_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1. Демпинг: 0% на всё", callback_data="set_mode_dumping")],
+        [InlineKeyboardButton(text="1. Демпинг: 0% (Себестоимость)", callback_data="set_mode_dumping")],
         [InlineKeyboardButton(text="2. Сарафан: 5% (<10k) / 3% (>10k)", callback_data="set_mode_low")],
         [InlineKeyboardButton(text="3. Стандарт: 10% (<10k) / 5% (>10k)", callback_data="set_mode_standard")],
-        [InlineKeyboardButton(text="4. Ввести свой фиксированный %", callback_data="set_mode_custom")],
-        [InlineKeyboardButton(text="« Назад", callback_data="adm_back")]
+        [InlineKeyboardButton(text="4. Свой фиксированный %", callback_data="set_mode_custom")],
+        [InlineKeyboardButton(text="« Назад в админку", callback_data="adm_back")]
     ])
 
 
-# --- СТАРТ И ВЫБОР ГОРОДА ---
+# --- СТАРТ И ГОРОД ---
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -168,13 +180,13 @@ async def cmd_start(message: Message, state: FSMContext):
             )
             await db.commit()
 
-    await log_action(user_id, "start", "Запустил бота")
+    await log_action(user_id, "start", "Старт бота")
 
     welcome_text = (
         "👋 **Добро пожаловать в POIZON 010!**\n\n"
-        "Мы возим оригинальные вещи с китайских маркетплейсов по самым открытым тарифам.\n\n"
-        f"📢 Наш канал: [POIZON 010]({CHANNEL_URL})\n\n"
-        "👉 **Для точного расчета выберите ваш город:**"
+        "Прямая доставка оригинальных товаров с Poizon / Dewu / Taobao по минимальной себестоимости без наценок посредников.\n\n"
+        f"📢 Официальный канал: [t.me/poizonstore010]({CHANNEL_URL})\n\n"
+        "🔻 **Укажите ваш город для настройки тарифов доставки:**"
     )
     await message.answer(welcome_text, reply_markup=get_city_kb(), parse_mode="Markdown", disable_web_page_preview=True)
 
@@ -183,14 +195,20 @@ async def cmd_start(message: Message, state: FSMContext):
 async def cb_set_city(callback: CallbackQuery):
     city_type = callback.data.split("_")[-1]
     city_name = "Ижевск" if city_type == "izhevsk" else "Другой город РФ"
+
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("UPDATE users SET city = ? WHERE user_id = ?", (city_name, callback.from_user.id))
         await db.commit()
+
     await log_action(callback.from_user.id, "set_city", city_name)
 
-    city_info = "✅ Город: **Ижевск** (Без СДЭК)" if city_name == "Ижевск" else "✅ Город: **Регионы РФ** (СДЭК оплачивается при получении)"
+    if city_name == "Ижевск":
+        city_info = "🟢 **Город: Ижевск**\nДоставка внутри города — **0 ₽** (Самовывоз / Встреча)."
+    else:
+        city_info = "🚚 **Город: Регионы РФ**\nДоставка из Ижевска до вашего ПВЗ СДЭК оплачивается отдельно при получении."
+
     await callback.message.edit_text(city_info, parse_mode="Markdown")
-    await callback.message.answer("Меню для расчета и заказа 👇", reply_markup=get_main_kb())
+    await callback.message.answer("Воспользуйтесь меню ниже для заказа и расчетов 👇", reply_markup=get_main_kb(callback.from_user.id))
     await callback.answer()
 
 
@@ -200,12 +218,17 @@ async def change_city(message: Message, state: FSMContext):
     await message.answer("Выберите ваш город:", reply_markup=get_city_kb())
 
 
-# --- КАЛЬКУЛЯТОР ---
+# --- КАЛЬКУЛЯТОР СТОИМОСТИ ---
 @dp.message(F.text == "🧮 Рассчитать стоимость")
 async def start_calc(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(CalcState.waiting_for_price)
-    await message.answer("Введите **стоимость товара в юанях (¥)**:\n*(Например: 450)*", parse_mode="Markdown")
+    await message.answer(
+        "💱 **Шаг 1 из 2:**\n\n"
+        "Введите **стоимость товара в юанях (¥)** со страницы Poizon:\n"
+        "*(Например: `450` или `1280`)*",
+        parse_mode="Markdown"
+    )
 
 
 @dp.message(CalcState.waiting_for_price)
@@ -215,18 +238,24 @@ async def process_calc_price(message: Message, state: FSMContext):
         if price_cny <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите корректное число:")
+        await message.answer("❌ Введите корректную цену цифрами (например: `520`):")
         return
 
     await state.update_data(price_cny=price_cny)
     await state.set_state(CalcState.waiting_for_weight)
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👟 Кроссовки (~1.3 кг)", callback_data="weight_1.3")],
-        [InlineKeyboardButton(text="👕 Футболка (~0.4 кг)", callback_data="weight_0.4")],
-        [InlineKeyboardButton(text="🧥 Худи (~0.8 кг)", callback_data="weight_0.8")],
-        [InlineKeyboardButton(text="🧥 Куртка (~1.8 кг)", callback_data="weight_1.8")]
+        [InlineKeyboardButton(text="👟 Кроссовки (~1.3 кг)", callback_data="weight_1.3"),
+         InlineKeyboardButton(text="👕 Футболка (~0.4 кг)", callback_data="weight_0.4")],
+        [InlineKeyboardButton(text="🧥 Худи / Свитшот (~0.8 кг)", callback_data="weight_0.8"),
+         InlineKeyboardButton(text="🧥 Куртка / Пуховик (~1.8 кг)", callback_data="weight_1.8")]
     ])
-    await message.answer("Выберите тип вещи или введите **вес в кг вручную**:", reply_markup=kb)
+    await message.answer(
+        "⚖️ **Шаг 2 из 2:**\n\n"
+        "Выберите стандартную категорию или отправьте **точный вес в кг вручную** (например: `0.6` или `1.4`):",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
 
 
 @dp.callback_query(CalcState.waiting_for_weight, F.data.startswith("weight_"))
@@ -243,7 +272,7 @@ async def process_calc_weight_msg(message: Message, state: FSMContext):
         if weight <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите корректный вес:")
+        await message.answer("❌ Введите вес числом (например: `1.2`):")
         return
     await finalize_calc(message, state, weight, message.from_user.id)
 
@@ -258,7 +287,9 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
     base_rub = price_cny * rate
 
     percent = 0.0
-    if mode == "low":
+    if mode == "dumping":
+        percent = 0.0
+    elif mode == "low":
         percent = 0.03 if base_rub >= 10000 else 0.05
     elif mode == "standard":
         percent = 0.05 if base_rub >= 10000 else 0.10
@@ -274,18 +305,25 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
         res = await cursor.fetchone()
         city = res[0] if res else "Ижевск"
 
-    sdek_info = "🟢 **По Ижевску:** 0 ₽ (Самовывоз)" if city == "Ижевск" else "🚚 **По РФ:** СДЭК оплачивается при получении"
+    sdek_badge = (
+        "🟢 **Доставка по Ижевску:** 0 ₽ (Личная встреча / Самовывоз)"
+        if city == "Ижевск" else
+        "🚚 **Доставка СДЭК:** оплачивается отдельно при заборе посылки"
+    )
 
     result = (
-        f"📊 **Расчет стоимости:**\n\n"
-        f"• Цена: **{price_cny} ¥** (~{round(base_rub)} ₽)\n"
-        f"• Вес: **{weight} кг**\n"
-        f"• Доставка (Китай-РФ): **{round(delivery_rub)} ₽**\n"
-        f"• Комиссия: **{round(margin_rub)} ₽**\n"
-        f"───────────────────\n"
-        f"💰 **ИТОГО: {total_rub} ₽**\n\n{sdek_info}"
+        f"📋 **Детализация стоимости:**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"• Цена товара: **{price_cny} ¥** (~{round(base_rub)} ₽ по курсу {rate})\n"
+        f"• Расчетный вес: **{weight} кг**\n"
+        f"• Доставка в РФ: **{round(delivery_rub)} ₽** ({int(deliv_rate)} ₽/кг)\n"
+        f"• Наша комиссия: **{round(margin_rub)} ₽** ({int(percent * 100)}%)\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💰 **ИТОГО: {total_rub} ₽**\n\n"
+        f"{sdek_badge}\n\n"
+        f"Чтобы зафиксировать заказ по этой цене, нажмите **«📦 Оформить заказ»**."
     )
-    await log_action(user_id, "calc", f"{price_cny}Y/{weight}kg -> {total_rub}rub")
+    await log_action(user_id, "calc", f"{price_cny}Y/{weight}kg -> {total_rub}RUB")
     await message.answer(result, parse_mode="Markdown")
 
 
@@ -294,67 +332,181 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
 async def start_order(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(OrderState.waiting_for_link)
-    await message.answer("📝 Отправьте ссылку на товар из Poizon или скриншот/название:")
+    await message.answer(
+        "📝 **Оформление заказа:**\n\n"
+        "Отправьте **ссылку** на товар из Poizon/Dewu или название модели/скриншот:",
+        parse_mode="Markdown"
+    )
 
 
 @dp.message(OrderState.waiting_for_link)
 async def process_order_link(message: Message, state: FSMContext):
-    await state.update_data(link=message.text or "Скрин/Фото")
+    await state.update_data(link=message.text or "Скриншот / фото")
     await state.set_state(OrderState.waiting_for_size)
-    await message.answer("Укажите размер (в EUR или мм) или нужный цвет:")
+    await message.answer(
+        "Укажите **размер** (в EUR / US или мм) и желаемый цвет:",
+        parse_mode="Markdown"
+    )
 
 
 @dp.message(OrderState.waiting_for_size)
 async def process_order_size(message: Message, state: FSMContext):
     size = message.text
     data = await state.get_data()
-    link = data.get("link", "")
+    link = data.get("link", "Не указана")
     await state.clear()
 
     user = message.from_user
     username = f"@{user.username}" if user.username else f"id: {user.id}"
 
     order_notification = (
-        f"🔥 **НОВАЯ ЗАЯВКА!**\n\n"
+        f"🔥 **НОВАЯ ЗАЯВКА POIZON 010!**\n\n"
         f"👤 Клиент: {user.full_name} ({username})\n"
-        f"🔗 Ссылка: {link}\n"
-        f"📏 Размер: {size}"
+        f"🆔 ID: `{user.id}`\n"
+        f"🔗 Товар / Ссылка: {link}\n"
+        f"📏 Размер: {size}\n"
+        f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
     try:
         await bot.send_message(ADMIN_ID, order_notification, parse_mode="Markdown")
     except Exception as e:
-        logging.error(f"Ошибка отправки админу: {e}")
+        logging.error(f"Сбой отправки заявки админу: {e}")
 
-    await log_action(user.id, "order", "Отправил заявку")
-    await message.answer("✅ **Заявка принята!** Мы проверим наличие и свяжемся с вами.", parse_mode="Markdown")
+    await log_action(user.id, "order", f"Заказ: {link[:25]} | {size}")
+    await message.answer(
+        "✅ **Заявка успешно принята!**\n\n"
+        "Мы проверим актуальную цену и наличие размера на Poizon, после чего свяжемся с вами в Telegram для подтверждения.",
+        parse_mode="Markdown"
+    )
 
 
-# --- ИНФО РАЗДЕЛЫ ---
+# --- ТАБЛИЦА РАЗМЕРОВ ---
 @dp.message(F.text == "📏 Таблица размеров")
-async def sizes_info(message: Message, state: FSMContext):
+async def sizes_menu(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Ориентируйтесь на длину стопы в миллиметрах (MM/JP). При заказе напишите длину стельки, мы поможем с размером.")
+    text = (
+        "📏 **Интерактивная таблица размеров:**\n\n"
+        "На Poizon европейские и американские размеры разных брендов часто не совпадают.\n"
+        "Самый точный ориентир — **длина стопы в сантиметрах (CM) или миллиметрах (MM)**.\n\n"
+        "Выберите интересующий бренд или категорию одежды 👇"
+    )
+    await message.answer(text, reply_markup=get_sizes_kb(), parse_mode="Markdown")
 
 
+@dp.callback_query(F.data.startswith("size_"))
+async def cb_sizes_detail(callback: CallbackQuery):
+    cat = callback.data.replace("size_", "")
+    if cat == "nike":
+        text = (
+            "👟 **Размерная сетка Nike / Jordan (Мужская):**\n"
+            "```text\n"
+            "EUR   | US    | Стелька (CM)\n"
+            "40    | 7.0   | 25.0 см\n"
+            "41    | 8.0   | 26.0 см\n"
+            "42    | 8.5   | 26.5 см\n"
+            "42.5  | 9.0   | 27.0 см\n"
+            "43    | 9.5   | 27.5 см\n"
+            "44    | 10.0  | 28.0 см\n"
+            "44.5  | 10.5  | 28.5 см\n"
+            "45    | 11.0  | 29.0 см\n"
+            "```\n"
+            "💡 *Nike обычно идут размер в размер (TTS).* Достаньте свою стельку и замерьте её рулеткой."
+        )
+    elif cat == "adidas":
+        text = (
+            "👟 **Размерная сетка Adidas / Yeezy:**\n"
+            "```text\n"
+            "EUR   | US    | Стелька (CM)\n"
+            "40    | 7.0   | 24.5 см\n"
+            "40.7  | 7.5   | 25.0 см\n"
+            "41.3  | 8.0   | 25.5 см\n"
+            "42    | 8.5   | 26.0 см\n"
+            "42.7  | 9.0   | 26.5 см\n"
+            "43.3  | 9.5   | 27.0 см\n"
+            "44    | 10.0  | 27.5 см\n"
+            "44.7  | 10.5  | 28.0 см\n"
+            "```\n"
+            "💡 *Yeezy 350 / 700 / Slide почти всегда маломерят — берите на 0.5–1 размер больше!*"
+        )
+    elif cat == "nb":
+        text = (
+            "👟 **Размерная сетка New Balance:**\n"
+            "```text\n"
+            "EUR   | US    | Стелька (CM)\n"
+            "40    | 7.0   | 25.0 см\n"
+            "40.5  | 7.5   | 25.5 см\n"
+            "41.5  | 8.0   | 26.0 см\n"
+            "42    | 8.5   | 26.5 см\n"
+            "42.5  | 9.0   | 27.0 см\n"
+            "43    | 9.5   | 27.5 см\n"
+            "44    | 10.0  | 28.0 см\n"
+            "44.5  | 10.5  | 28.5 см\n"
+            "```\n"
+            "💡 *Модели 1906R, 2002R, 530 идут строго по сетке в сантиметрах.*"
+        )
+    else:
+        text = (
+            "👕 **Одежда (Футболки, Худи, Брюки):**\n"
+            "```text\n"
+            "Размер | Рост (см)  | Вес (кг)\n"
+            "S      | 165 - 172  | 55 - 65\n"
+            "M      | 170 - 178  | 65 - 75\n"
+            "L      | 175 - 183  | 75 - 85\n"
+            "XL     | 180 - 188  | 85 - 95\n"
+            "XXL    | 185 - 195  | 95 - 110\n"
+            "```\n"
+            "💡 *Азиатские бренды могут маломерить на размер. Всегда уточняйте длину по спине и ширину груди.*"
+        )
+
+    await callback.message.edit_text(text, reply_markup=get_sizes_kb(), parse_mode="Markdown")
+    await callback.answer()
+
+
+# --- ПРИМЕРНЫЙ ВЕС ТОВАРОВ ---
 @dp.message(F.text == "⚖️ Примерный вес вещей")
 async def weights_info(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Футболки: 0.4 кг\nХуди: 0.8 кг\nКроссовки: 1.3 - 1.5 кг\nПуховики: 2 кг")
+    text = (
+        "⚖️ **Средний вес товаров (с учетом фирменной коробки Poizon):**\n\n"
+        "👟 **Обувь:**\n"
+        "• Легкие кеды / Слипоны / Тапки: **~0.8 – 1.0 кг**\n"
+        "• Низкие кроссовки (Dunk, Air Force, Samba): **~1.2 – 1.4 кг**\n"
+        "• Массивные / Высокие кроссовки (Jordan 4, Bape): **~1.5 – 1.8 кг**\n"
+        "• Ботинки / Зимняя обувь: **~1.8 – 2.3 кг**\n\n"
+        "👕 **Одежда:**\n"
+        "• Футболки, шорты: **~0.3 – 0.5 кг**\n"
+        "• Лонгсливы, рубашки, тонкие свитшоты: **~0.5 – 0.7 кг**\n"
+        "• Плотные худи (Оверсайз / 450+ gsm), джинсы: **~0.8 – 1.1 кг**\n"
+        "• Демисезонные куртки, ветровки: **~1.0 – 1.4 кг**\n"
+        "• Зимние пуховики: **~1.6 – 2.4 кг**\n\n"
+        "🎒 **Аксессуары:**\n"
+        "• Кепки, шапки, ремни, носки: **~0.2 – 0.4 кг**\n"
+        "• Рюкзаки, спортивные сумки: **~0.8 – 1.3 кг**\n\n"
+        "💡 *Вес уже учитывает сертификационную коробку и пластиковые пломбы Poizon.*"
+    )
+    await message.answer(text, parse_mode="Markdown")
 
 
+# --- КАНАЛ ---
 @dp.message(F.text == "📢 Наш канал")
 async def channel_info(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(f"👉 [Перейти в POIZON 010]({CHANNEL_URL})", parse_mode="Markdown")
+    await message.answer(
+        f"Подписывайтесь на наш канал с подборками и отзывами:\n👉 [POIZON 010]({CHANNEL_URL})",
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
 
 
-# --- АДМИНКА ---
+# --- ПОЛНОЦЕННОЕ УПРАВЛЕНИЕ АДМИНОМ ---
+@dp.message(F.text == "👑 Админ-панель")
 @dp.message(Command("admin"))
 async def admin_panel(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     await state.clear()
-    await message.answer("⚙️ **Панель управления**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
+    settings = await get_settings()
+    await message.answer("👑 **Панель управления POIZON 010**", reply_markup=get_admin_kb(settings), parse_mode="Markdown")
 
 
 @dp.callback_query(F.data == "adm_rate")
@@ -362,7 +514,7 @@ async def adm_change_rate(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         return
     await state.set_state(AdminState.waiting_for_rate)
-    await callback.message.answer("Введите курс (например: 13.95):")
+    await callback.message.answer("Введите новый **курс юаня** (например: `13.95`):", parse_mode="Markdown")
     await callback.answer()
 
 
@@ -374,9 +526,10 @@ async def adm_save_rate(message: Message, state: FSMContext):
         val = float(message.text.replace(",", "."))
         await update_setting("cny_rate", val)
         await state.clear()
-        await message.answer(f"✅ Курс: **{val} ₽**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
+        settings = await get_settings()
+        await message.answer(f"✅ Курс юаня обновлен: **{val} ₽**", reply_markup=get_admin_kb(settings), parse_mode="Markdown")
     except ValueError:
-        await message.answer("❌ Введите число:")
+        await message.answer("❌ Введите число цифрами:")
 
 
 @dp.callback_query(F.data == "adm_deliv")
@@ -384,7 +537,7 @@ async def adm_change_deliv(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         return
     await state.set_state(AdminState.waiting_for_delivery_price)
-    await callback.message.answer("Введите стоимость доставки за 1 кг (например: 1200):")
+    await callback.message.answer("Введите **стоимость доставки за 1 кг в рублях** (например: `1150`):", parse_mode="Markdown")
     await callback.answer()
 
 
@@ -396,16 +549,17 @@ async def adm_save_deliv(message: Message, state: FSMContext):
         val = float(message.text.replace(",", "."))
         await update_setting("delivery_per_kg", val)
         await state.clear()
-        await message.answer(f"✅ Доставка: **{val} ₽/кг**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
+        settings = await get_settings()
+        await message.answer(f"✅ Доставка обновлена: **{val} ₽/кг**", reply_markup=get_admin_kb(settings), parse_mode="Markdown")
     except ValueError:
-        await message.answer("❌ Введите число:")
+        await message.answer("❌ Введите число цифрами:")
 
 
 @dp.callback_query(F.data == "adm_modes")
 async def adm_modes(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
-    await callback.message.edit_text("Выберите тариф:", reply_markup=get_margin_modes_kb())
+    await callback.message.edit_text("⚙️ **Выберите схему наценки бота:**", reply_markup=get_margin_modes_kb(), parse_mode="Markdown")
     await callback.answer()
 
 
@@ -416,11 +570,13 @@ async def adm_set_mode(callback: CallbackQuery, state: FSMContext):
     mode = callback.data.replace("set_mode_", "")
     if mode == "custom":
         await state.set_state(AdminState.waiting_for_custom_percent)
-        await callback.message.answer("Введите % наценки (например: 7):")
+        await callback.message.answer("Введите **фиксированный процент наценки** (например: `6`):", parse_mode="Markdown")
         await callback.answer()
         return
+
     await update_setting("margin_mode", mode)
-    await callback.message.edit_text("✅ Режим обновлен!", reply_markup=get_admin_kb(await get_settings()))
+    settings = await get_settings()
+    await callback.message.edit_text("✅ Схема наценки обновлена!", reply_markup=get_admin_kb(settings))
     await callback.answer()
 
 
@@ -433,7 +589,8 @@ async def adm_save_custom_percent(message: Message, state: FSMContext):
         await update_setting("margin_mode", "custom")
         await update_setting("custom_percent", val)
         await state.clear()
-        await message.answer(f"✅ Установлен %: **{val}%**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
+        settings = await get_settings()
+        await message.answer(f"✅ Установлен персональный тариф: **{val}%**", reply_markup=get_admin_kb(settings), parse_mode="Markdown")
     except ValueError:
         await message.answer("❌ Введите число:")
 
@@ -442,7 +599,8 @@ async def adm_save_custom_percent(message: Message, state: FSMContext):
 async def adm_back(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
-    await callback.message.edit_text("⚙️ **Панель управления**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
+    settings = await get_settings()
+    await callback.message.edit_text("👑 **Панель управления POIZON 010**", reply_markup=get_admin_kb(settings), parse_mode="Markdown")
     await callback.answer()
 
 
@@ -455,7 +613,11 @@ async def adm_users_count(callback: CallbackQuery):
         rows = await cursor.fetchall()
         total_cursor = await db.execute("SELECT COUNT(*) FROM users")
         total = (await total_cursor.fetchone())[0]
-    report = f"👥 Всего: **{total}**\n\n" + "\n".join(f"• {c}: **{cnt}**" for cnt, c in rows)
+
+    report = f"👥 Всего пользователей в базе: **{total}**\n\nРаспределение по городам:\n"
+    for cnt, city in rows:
+        report += f"• {city}: **{cnt} чел.**\n"
+
     await callback.message.answer(report, parse_mode="Markdown")
     await callback.answer()
 
@@ -467,7 +629,16 @@ async def adm_show_logs(callback: CallbackQuery):
     async with aiosqlite.connect(DB_FILE) as db:
         cursor = await db.execute("SELECT user_id, action, details, created_at FROM logs ORDER BY id DESC LIMIT 10")
         logs = await cursor.fetchall()
-    text = "📋 **Последние действия:**\n\n" + "\n".join(f"`[{dt[11:16]}]` ID `{u}`: {a} ({d})" for u, a, d, dt in logs) if logs else "Логов нет."
+
+    if not logs:
+        await callback.message.answer("Логов пока нет.")
+        await callback.answer()
+        return
+
+    text = "📋 **Последние 10 действий пользователей:**\n\n"
+    for u, a, d, dt in logs:
+        text += f"• `[{dt[11:16]}]` ID `{u}`: **{a}** ({d})\n"
+
     await callback.message.answer(text, parse_mode="Markdown")
     await callback.answer()
 
@@ -491,7 +662,7 @@ async def run_web_server():
 
 async def main():
     await init_db()
-    logging.info("База данных инициализирована. Запуск бота и веб-сервера...")
+    logging.info("База данных готова. Запуск сервиса...")
     asyncio.create_task(run_web_server())
     await dp.start_polling(bot)
 
