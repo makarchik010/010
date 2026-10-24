@@ -18,7 +18,7 @@ import aiosqlite
 from aiohttp import web
 
 BOT_TOKEN = "8816444631:AAEj2JoljUfk2T2pg_VcxFRzlMMDaUINQnU"
-ADMIN_ID = 1681547868  # Твой числовой ID в Telegram
+ADMIN_ID = 1681547868  # Твой числовой Telegram ID
 CHANNEL_URL = "https://t.me/poizon010"
 
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +41,7 @@ class OrderState(StatesGroup):
     waiting_for_size = State()
 
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
+# --- БАЗА ДАННЫХ ---
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("""
@@ -118,11 +118,13 @@ def get_main_kb():
         resize_keyboard=True
     )
 
+
 def get_city_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📍 Ижевск (Самовывоз / Без СДЭК)", callback_data="set_city_izhevsk")],
         [InlineKeyboardButton(text="🚚 Другой город РФ (Доставка СДЭК)", callback_data="set_city_other")]
     ])
+
 
 def get_admin_kb(settings):
     mode_names = {
@@ -139,6 +141,7 @@ def get_admin_kb(settings):
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="adm_users_count")]
     ])
 
+
 def get_margin_modes_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1. Демпинг: 0% на всё", callback_data="set_mode_dumping")],
@@ -150,7 +153,7 @@ def get_margin_modes_kb():
 
 
 # --- СТАРТ И ВЫБОР ГОРОДА ---
-@dp.message(CommandStart(), state="*")
+@dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
@@ -175,6 +178,7 @@ async def cmd_start(message: Message, state: FSMContext):
     )
     await message.answer(welcome_text, reply_markup=get_city_kb(), parse_mode="Markdown", disable_web_page_preview=True)
 
+
 @dp.callback_query(F.data.startswith("set_city_"))
 async def cb_set_city(callback: CallbackQuery):
     city_type = callback.data.split("_")[-1]
@@ -189,25 +193,30 @@ async def cb_set_city(callback: CallbackQuery):
     await callback.message.answer("Меню для расчета и заказа 👇", reply_markup=get_main_kb())
     await callback.answer()
 
-@dp.message(F.text == "📍 Сменить город", state="*")
+
+@dp.message(F.text == "📍 Сменить город")
 async def change_city(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Выберите ваш город:", reply_markup=get_city_kb())
 
+
 # --- КАЛЬКУЛЯТОР ---
-@dp.message(F.text == "🧮 Рассчитать стоимость", state="*")
+@dp.message(F.text == "🧮 Рассчитать стоимость")
 async def start_calc(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(CalcState.waiting_for_price)
     await message.answer("Введите **стоимость товара в юанях (¥)**:\n*(Например: 450)*", parse_mode="Markdown")
 
+
 @dp.message(CalcState.waiting_for_price)
 async def process_calc_price(message: Message, state: FSMContext):
     try:
         price_cny = float(message.text.replace(",", ".").strip())
-        if price_cny <= 0: raise ValueError
+        if price_cny <= 0:
+            raise ValueError
     except ValueError:
-        return await message.answer("❌ Введите корректное число:")
+        await message.answer("❌ Введите корректное число:")
+        return
     
     await state.update_data(price_cny=price_cny)
     await state.set_state(CalcState.waiting_for_weight)
@@ -219,20 +228,25 @@ async def process_calc_price(message: Message, state: FSMContext):
     ])
     await message.answer("Выберите тип вещи или введите **вес в кг вручную**:", reply_markup=kb)
 
+
 @dp.callback_query(CalcState.waiting_for_weight, F.data.startswith("weight_"))
 async def process_calc_weight_cb(callback: CallbackQuery, state: FSMContext):
     weight = float(callback.data.split("_")[1])
     await callback.answer()
     await finalize_calc(callback.message, state, weight, callback.from_user.id)
 
+
 @dp.message(CalcState.waiting_for_weight)
 async def process_calc_weight_msg(message: Message, state: FSMContext):
     try:
         weight = float(message.text.replace(",", ".").strip())
-        if weight <= 0: raise ValueError
+        if weight <= 0:
+            raise ValueError
     except ValueError:
-        return await message.answer("❌ Введите корректный вес:")
+        await message.answer("❌ Введите корректный вес:")
+        return
     await finalize_calc(message, state, weight, message.from_user.id)
+
 
 async def finalize_calc(message: Message, state: FSMContext, weight: float, user_id: int):
     data = await state.get_data()
@@ -244,9 +258,12 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
     base_rub = price_cny * rate
 
     percent = 0.0
-    if mode == "low": percent = 0.03 if base_rub >= 10000 else 0.05
-    elif mode == "standard": percent = 0.05 if base_rub >= 10000 else 0.10
-    elif mode == "custom": percent = settings["custom_percent"] / 100.0
+    if mode == "low":
+        percent = 0.03 if base_rub >= 10000 else 0.05
+    elif mode == "standard":
+        percent = 0.05 if base_rub >= 10000 else 0.10
+    elif mode == "custom":
+        percent = settings["custom_percent"] / 100.0
 
     margin_rub, delivery_rub = base_rub * percent, weight * deliv_rate
     total_rub = round(base_rub + margin_rub + delivery_rub)
@@ -270,18 +287,21 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
     await log_action(user_id, "calc", f"{price_cny}Y/{weight}kg -> {total_rub}₽")
     await message.answer(result, parse_mode="Markdown")
 
+
 # --- ОФОРМЛЕНИЕ ЗАКАЗА ---
-@dp.message(F.text == "📦 Оформить заказ", state="*")
+@dp.message(F.text == "📦 Оформить заказ")
 async def start_order(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(OrderState.waiting_for_link)
     await message.answer("📝 Отправьте ссылку на товар из Poizon или скриншот/название:")
+
 
 @dp.message(OrderState.waiting_for_link)
 async def process_order_link(message: Message, state: FSMContext):
     await state.update_data(link=message.text or "Скрин/Фото")
     await state.set_state(OrderState.waiting_for_size)
     await message.answer("Укажите размер (в EUR или мм) или нужный цвет:")
+
 
 @dp.message(OrderState.waiting_for_size)
 async def process_order_size(message: Message, state: FSMContext):
@@ -298,41 +318,51 @@ async def process_order_size(message: Message, state: FSMContext):
         f"🔗 Ссылка: {link}\n"
         f"📏 Размер: {size}"
     )
-    try: await bot.send_message(ADMIN_ID, order_notification, parse_mode="Markdown")
-    except Exception: pass
+    try:
+        await bot.send_message(ADMIN_ID, order_notification, parse_mode="Markdown")
+    except Exception:
+        pass
     
     await log_action(user.id, "order", "Отправил заявку")
     await message.answer("✅ **Заявка принята!** Мы проверим наличие и свяжемся с вами.", parse_mode="Markdown")
 
+
 # --- ИНФО РАЗДЕЛЫ ---
-@dp.message(F.text == "📏 Таблица размеров", state="*")
+@dp.message(F.text == "📏 Таблица размеров")
 async def sizes_info(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Ориентируйтесь на длину стопы в миллиметрах (MM/JP). При заказе напишите длину стельки, мы поможем с размером.")
 
-@dp.message(F.text == "⚖️ Примерный вес вещей", state="*")
+
+@dp.message(F.text == "⚖️ Примерный вес вещей")
 async def weights_info(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Футболки: 0.4 кг\nХуди: 0.8 кг\nКроссовки: 1.3 - 1.5 кг\nПуховики: 2 кг")
 
-@dp.message(F.text == "📢 Наш канал", state="*")
+
+@dp.message(F.text == "📢 Наш канал")
 async def channel_info(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"👉 [Перейти в POIZON 010]({CHANNEL_URL})", parse_mode="Markdown")
 
+
 # --- АДМИНКА ---
-@dp.message(Command("admin"), state="*")
+@dp.message(Command("admin"))
 async def admin_panel(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID:
+        return
     await state.clear()
     await message.answer("⚙️ **Панель управления**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
 
+
 @dp.callback_query(F.data == "adm_rate")
 async def adm_change_rate(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id != ADMIN_ID:
+        return
     await state.set_state(AdminState.waiting_for_rate)
     await callback.message.answer("Введите курс (например: 13.95):")
     await callback.answer()
+
 
 @dp.message(AdminState.waiting_for_rate)
 async def adm_save_rate(message: Message, state: FSMContext):
@@ -341,14 +371,18 @@ async def adm_save_rate(message: Message, state: FSMContext):
         await update_setting("cny_rate", val)
         await state.clear()
         await message.answer(f"✅ Курс: **{val} ₽**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
-    except ValueError: await message.answer("❌ Введите число:")
+    except ValueError:
+        await message.answer("❌ Введите число:")
+
 
 @dp.callback_query(F.data == "adm_deliv")
 async def adm_change_deliv(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id != ADMIN_ID:
+        return
     await state.set_state(AdminState.waiting_for_delivery_price)
     await callback.message.answer("Введите стоимость доставки за 1 кг (например: 1200):")
     await callback.answer()
+
 
 @dp.message(AdminState.waiting_for_delivery_price)
 async def adm_save_deliv(message: Message, state: FSMContext):
@@ -357,83 +391,36 @@ async def adm_save_deliv(message: Message, state: FSMContext):
         await update_setting("delivery_per_kg", val)
         await state.clear()
         await message.answer(f"✅ Доставка: **{val} ₽/кг**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
-    except ValueError: await message.answer("❌ Введите число:")
+    except ValueError:
+        await message.answer("❌ Введите число:")
+
 
 @dp.callback_query(F.data == "adm_modes")
 async def adm_modes(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id != ADMIN_ID:
+        return
     await callback.message.edit_text("Выберите тариф:", reply_markup=get_margin_modes_kb())
     await callback.answer()
 
+
 @dp.callback_query(F.data.startswith("set_mode_"))
 async def adm_set_mode(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id != ADMIN_ID:
+        return
     mode = callback.data.replace("set_mode_", "")
     if mode == "custom":
         await state.set_state(AdminState.waiting_for_custom_percent)
         await callback.message.answer("Введите % наценки (например: 7):")
-        return await callback.answer()
+        await callback.answer()
+        return
     await update_setting("margin_mode", mode)
     await callback.message.edit_text("✅ Режим обновлен!", reply_markup=get_admin_kb(await get_settings()))
     await callback.answer()
+
 
 @dp.message(AdminState.waiting_for_custom_percent)
 async def adm_save_custom_percent(message: Message, state: FSMContext):
     try:
         val = float(message.text.replace(",", "."))
         await update_setting("margin_mode", "custom")
-        await update_setting("custom_percent", val)
-        await state.clear()
-        await message.answer(f"✅ Установлен %: **{val}%**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
-    except ValueError: await message.answer("❌ Введите число:")
-
-@dp.callback_query(F.data == "adm_back")
-async def adm_back(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
-    await callback.message.edit_text("⚙️ **Панель управления**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
-
-@dp.callback_query(F.data == "adm_users_count")
-async def adm_users_count(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
-    async with aiosqlite.connect(DB_FILE) as db:
-        cursor = await db.execute("SELECT COUNT(*), city FROM users GROUP BY city")
-        rows = await cursor.fetchall()
-        total = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
-    report = f"👥 Всего: **{total}**\n\n" + "\n".join(f"• {c}: **{cnt}**" for cnt, c in rows)
-    await callback.message.answer(report, parse_mode="Markdown")
-    await callback.answer()
-
-@dp.callback_query(F.data == "adm_logs")
-async def adm_show_logs(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
-    async with aiosqlite.connect(DB_FILE) as db:
-        cursor = await db.execute("SELECT user_id, action, details, created_at FROM logs ORDER BY id DESC LIMIT 10")
-        logs = await cursor.fetchall()
-    text = "📋 **Последние действия:**\n\n" + "\n".join(f"`[{dt[11:16]}]` ID `{u}`: {a} ({d})" for u, a, d, dt in logs) if logs else "Логов нет."
-    await callback.message.answer(text, parse_mode="Markdown")
-    await callback.answer()
-
-# --- ВЕБ-СЕРВЕР И ЗАПУСК (ДЛЯ RENDER) ---
-async def handle_ping(request):
-    return web.Response(text="Poizon 010 Bot is running!")
-
-async def run_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    await asyncio.Event().wait()
-
-async def main():
-    await init_db()
-    logging.info("База данных инициализирована. Запуск бота и веб-сервера...")
-    
-    # Запускаем веб-сервер и бота параллельно
-    asyncio.create_task(run_web_server())
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        await
