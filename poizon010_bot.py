@@ -12,7 +12,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
-    KeyboardButton
+    KeyboardButton,
+    User
 )
 import aiosqlite
 from aiohttp import web
@@ -69,6 +70,7 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
+                user_tag TEXT,
                 action TEXT,
                 details TEXT,
                 created_at TEXT
@@ -83,19 +85,25 @@ async def init_db():
         await db.commit()
 
 
-async def log_action(user_id: int, action: str, details: str = ""):
+async def log_action(user: User, action: str, details: str = ""):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # 1. Запись в локальную базу данных
+    # Формируем читаемый юзернейм
+    if user.username:
+        user_tag = f"@{user.username} ({user.full_name})"
+    else:
+        user_tag = f"[{user.full_name}](tg://user?id={user.id})"
+
+    # 1. Запись в базу данных
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
-            "INSERT INTO logs (user_id, action, details, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, action, details, now_str)
+            "INSERT INTO logs (user_id, user_tag, action, details, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user.id, user_tag, action, details, now_str)
         )
         await db.commit()
 
-    # 2. Моментальное уведомление админу в личку (только если действие совершил НЕ сам админ)
-    if user_id != ADMIN_ID:
+    # 2. Мгновенное уведомление админу в личку (только если кликает клиент, а не админ)
+    if user.id != ADMIN_ID:
         action_names = {
             "start": "🚀 Запустил бота",
             "set_city": "📍 Выбрал город",
@@ -105,7 +113,8 @@ async def log_action(user_id: int, action: str, details: str = ""):
         name = action_names.get(action, f"Действие: {action}")
         msg = (
             f"🔔 **Активность клиента!**\n\n"
-            f"👤 ID: `{user_id}`\n"
+            f"👤 Клиент: {user_tag}\n"
+            f"🆔 ID: `{user.id}`\n"
             f"⚡ Событие: **{name}**\n"
             f"ℹ️ Детали: `{details}`\n"
             f"⏰ Время: {now_str[11:16]}"
@@ -134,7 +143,7 @@ async def update_setting(key: str, value):
         await db.commit()
 
 
-# --- ГЛАВНЫЕ КЛАВИАТУРЫ ---
+# --- КЛАВИАТУРЫ ---
 def get_main_kb(user_id: int):
     buttons = [
         [KeyboardButton(text="🧮 Рассчитать стоимость"), KeyboardButton(text="📦 Оформить заказ")],
@@ -193,27 +202,27 @@ def get_margin_modes_kb():
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    user_id = message.from_user.id
+    user = message.from_user
 
     async with aiosqlite.connect(DB_FILE) as db:
-        cursor = await db.execute("SELECT city FROM users WHERE user_id = ?", (user_id,))
-        user = await cursor.fetchone()
-        if not user:
+        cursor = await db.execute("SELECT city FROM users WHERE user_id = ?", (user.id,))
+        existing_user = await cursor.fetchone()
+        if not existing_user:
             await db.execute(
                 "INSERT INTO users (user_id, username, full_name, city, registered_at) VALUES (?, ?, ?, ?, ?)",
-                (user_id, message.from_user.username or "", message.from_user.full_name, "Не выбран", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                (user.id, user.username or "", user.full_name, "Не выбран", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             )
             await db.commit()
 
-    await log_action(user_id, "start", "Старт бота")
+    await log_action(user, "start", "Старт бота")
 
     welcome_text = (
         "👋 **Добро пожаловать в сервис доставки товаров из Китая — POIZON 010!**\n\n"
         "Мы выкупаем и доставляем **любые товары напрямую из Китая**:\n"
-        "• **Poizon / Dewu** — брендовая одежда, обувь, аксессуары с проверкой на подлинность\n"
-        "• **Taobao / Tmall** — огромный выбор одежды, стаффа, электроники и предметов интерьера\n"
-        "• **1688** — оптовые и фабричные цены напрямую от производителей\n"
-        "• **Xianyu (Fish)** — редкий винтаж, лимитированные коллекции и айтемы со вторички\n\n"
+        "• **Poizon / Dewu** — брендовая обувь, одежда и аксессуары с проверкой на подлинность\n"
+        "• **Taobao / Tmall** — огромный каталог локальных брендов, электроники и трендовых вещей\n"
+        "• **1688** — оптовые фабричные цены напрямую от производителей\n"
+        "• **Xianyu (Fish)** — архивные релизы, редкий стафф и айтемы со вторички\n\n"
         "Работаем по минимальным тарифам без скрытых накруток.\n\n"
         f"📢 Канал с отзывами и подборками: [t.me/poizonstore010]({CHANNEL_URL})\n\n"
         "🔻 **Для расчета стоимости доставки укажите ваш город:**"
@@ -230,7 +239,7 @@ async def cb_set_city(callback: CallbackQuery):
         await db.execute("UPDATE users SET city = ? WHERE user_id = ?", (city_name, callback.from_user.id))
         await db.commit()
 
-    await log_action(callback.from_user.id, "set_city", city_name)
+    await log_action(callback.from_user, "set_city", city_name)
 
     if city_name == "Ижевск":
         city_info = "🟢 **Город: Ижевск**\nВнутренняя доставка — **0 ₽** (Самовывоз / Личная передача)."
@@ -293,7 +302,7 @@ async def process_calc_price(message: Message, state: FSMContext):
 async def process_calc_weight_cb(callback: CallbackQuery, state: FSMContext):
     weight = float(callback.data.split("_")[1])
     await callback.answer()
-    await finalize_calc(callback.message, state, weight, callback.from_user.id)
+    await finalize_calc(callback.message, state, weight, callback.from_user)
 
 
 @dp.message(CalcState.waiting_for_weight)
@@ -305,10 +314,10 @@ async def process_calc_weight_msg(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ Введите вес числом (например: `1.2`):")
         return
-    await finalize_calc(message, state, weight, message.from_user.id)
+    await finalize_calc(message, state, weight, message.from_user)
 
 
-async def finalize_calc(message: Message, state: FSMContext, weight: float, user_id: int):
+async def finalize_calc(message: Message, state: FSMContext, weight: float, user: User):
     data = await state.get_data()
     price_cny = data["price_cny"]
     await state.clear()
@@ -332,7 +341,7 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
     total_rub = round(base_rub + margin_rub + delivery_rub)
 
     async with aiosqlite.connect(DB_FILE) as db:
-        cursor = await db.execute("SELECT city FROM users WHERE user_id = ?", (user_id,))
+        cursor = await db.execute("SELECT city FROM users WHERE user_id = ?", (user.id,))
         res = await cursor.fetchone()
         city = res[0] if res else "Ижевск"
 
@@ -354,7 +363,7 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
         f"{sdek_badge}\n\n"
         f"Чтобы оформить выкуп этого товара, нажмите кнопку **«📦 Оформить заказ»**."
     )
-    await log_action(user_id, "calc", f"{price_cny}Y/{weight}kg -> {total_rub}RUB")
+    await log_action(user, "calc", f"{price_cny}Y / {weight}kg -> {total_rub}RUB")
     await message.answer(result, parse_mode="Markdown")
 
 
@@ -391,20 +400,18 @@ async def process_order_size(message: Message, state: FSMContext):
     await state.clear()
 
     user = message.from_user
-    username = f"@{user.username}" if user.username else f"id: {user.id}"
+    username = f"@{user.username}" if user.username else f"[{user.full_name}](tg://user?id={user.id})"
 
-    # Отправляем заказчику подтверждение
-    await log_action(user.id, "order", f"Заказ: {link[:25]} | {size}")
+    await log_action(user, "order", f"Заказ: {link[:25]} | {size}")
     await message.answer(
         "✅ **Заявка принята!**\n\n"
         "Мы проверим актуальную стоимость выкупа, наличие у продавца и напишем вам в личные сообщения для подтверждения заказа.",
         parse_mode="Markdown"
     )
 
-    # Дублируем заказ в личку админу
     order_notification = (
         f"🔥 **НОВАЯ ЗАЯВКА НА ВЫКУП!**\n\n"
-        f"👤 Клиент: {user.full_name} ({username})\n"
+        f"👤 Клиент: {username} ({user.full_name})\n"
         f"🆔 ID: `{user.id}`\n"
         f"🔗 Ссылка / Описание: {link}\n"
         f"📏 Размер / Параметры: {size}\n"
@@ -416,7 +423,7 @@ async def process_order_size(message: Message, state: FSMContext):
         logging.error(f"Сбой отправки админу: {e}")
 
 
-# --- ОТКУДА ДОСТАВЛЯЕМ (СПРАВКА ПО ПЛОЩАДКАМ) ---
+# --- ОТКУДА ДОСТАВЛЯЕМ ---
 @dp.message(F.text == "🌐 Откуда доставляем")
 async def platforms_info(message: Message, state: FSMContext):
     await state.clear()
@@ -683,7 +690,7 @@ async def adm_show_logs(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
     async with aiosqlite.connect(DB_FILE) as db:
-        cursor = await db.execute("SELECT user_id, action, details, created_at FROM logs ORDER BY id DESC LIMIT 10")
+        cursor = await db.execute("SELECT user_tag, action, details, created_at FROM logs ORDER BY id DESC LIMIT 10")
         logs = await cursor.fetchall()
 
     if not logs:
@@ -692,8 +699,8 @@ async def adm_show_logs(callback: CallbackQuery):
         return
 
     text = "📋 **Последние 10 действий пользователей:**\n\n"
-    for u, a, d, dt in logs:
-        text += f"• `[{dt[11:16]}]` ID `{u}`: **{a}** ({d})\n"
+    for tag, a, d, dt in logs:
+        text += f"• `[{dt[11:16]}]` {tag}: **{a}** ({d})\n"
 
     await callback.message.answer(text, parse_mode="Markdown")
     await callback.answer()
