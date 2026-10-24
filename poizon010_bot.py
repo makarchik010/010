@@ -17,8 +17,8 @@ from aiogram.types import (
 import aiosqlite
 from aiohttp import web
 
-BOT_TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН_БОТА"
-ADMIN_ID = 123456789  # ВПИШИ СЮДА СВОЙ ЧИСЛОВОЙ ID БЕЗ КАВЫЧЕК
+BOT_TOKEN = "8816444631:AAEj2JoljUfk2T2pg_VcxFRzlMMDaUINQnU"
+ADMIN_ID = 1681547868  # ВПИШИ СЮДА СВОЙ ЧИСЛОВОЙ ID БЕЗ КАВЫЧЕК
 CHANNEL_URL = "https://t.me/poizonstore010"
 
 logging.basicConfig(level=logging.INFO)
