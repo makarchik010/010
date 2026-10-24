@@ -217,7 +217,7 @@ async def process_calc_price(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ Введите корректное число:")
         return
-    
+
     await state.update_data(price_cny=price_cny)
     await state.set_state(CalcState.waiting_for_weight)
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -265,7 +265,8 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
     elif mode == "custom":
         percent = settings["custom_percent"] / 100.0
 
-    margin_rub, delivery_rub = base_rub * percent, weight * deliv_rate
+    margin_rub = base_rub * percent
+    delivery_rub = weight * deliv_rate
     total_rub = round(base_rub + margin_rub + delivery_rub)
 
     async with aiosqlite.connect(DB_FILE) as db:
@@ -273,8 +274,8 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
         res = await cursor.fetchone()
         city = res[0] if res else "Ижевск"
 
-    sdek_info = "🟢 **По Ижевску:** 0 ₽" if city == "Ижевск" else "🚚 **По РФ:** СДЭК оплачивается при получении"
-    
+    sdek_info = "🟢 **По Ижевску:** 0 ₽ (Самовывоз)" if city == "Ижевск" else "🚚 **По РФ:** СДЭК оплачивается при получении"
+
     result = (
         f"📊 **Расчет стоимости:**\n\n"
         f"• Цена: **{price_cny} ¥** (~{round(base_rub)} ₽)\n"
@@ -284,7 +285,7 @@ async def finalize_calc(message: Message, state: FSMContext, weight: float, user
         f"───────────────────\n"
         f"💰 **ИТОГО: {total_rub} ₽**\n\n{sdek_info}"
     )
-    await log_action(user_id, "calc", f"{price_cny}Y/{weight}kg -> {total_rub}₽")
+    await log_action(user_id, "calc", f"{price_cny}Y/{weight}kg -> {total_rub}rub")
     await message.answer(result, parse_mode="Markdown")
 
 
@@ -306,12 +307,13 @@ async def process_order_link(message: Message, state: FSMContext):
 @dp.message(OrderState.waiting_for_size)
 async def process_order_size(message: Message, state: FSMContext):
     size = message.text
-    link = (await state.get_data()).get("link", "")
+    data = await state.get_data()
+    link = data.get("link", "")
     await state.clear()
-    
+
     user = message.from_user
     username = f"@{user.username}" if user.username else f"id: {user.id}"
-    
+
     order_notification = (
         f"🔥 **НОВАЯ ЗАЯВКА!**\n\n"
         f"👤 Клиент: {user.full_name} ({username})\n"
@@ -320,9 +322,9 @@ async def process_order_size(message: Message, state: FSMContext):
     )
     try:
         await bot.send_message(ADMIN_ID, order_notification, parse_mode="Markdown")
-    except Exception:
-        pass
-    
+    except Exception as e:
+        logging.error(f"Ошибка отправки админу: {e}")
+
     await log_action(user.id, "order", "Отправил заявку")
     await message.answer("✅ **Заявка принята!** Мы проверим наличие и свяжемся с вами.", parse_mode="Markdown")
 
@@ -366,6 +368,8 @@ async def adm_change_rate(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminState.waiting_for_rate)
 async def adm_save_rate(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
     try:
         val = float(message.text.replace(",", "."))
         await update_setting("cny_rate", val)
@@ -386,6 +390,8 @@ async def adm_change_deliv(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminState.waiting_for_delivery_price)
 async def adm_save_deliv(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
     try:
         val = float(message.text.replace(",", "."))
         await update_setting("delivery_per_kg", val)
@@ -420,7 +426,75 @@ async def adm_set_mode(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminState.waiting_for_custom_percent)
 async def adm_save_custom_percent(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
     try:
         val = float(message.text.replace(",", "."))
         await update_setting("margin_mode", "custom")
-        await
+        await update_setting("custom_percent", val)
+        await state.clear()
+        await message.answer(f"✅ Установлен %: **{val}%**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
+    except ValueError:
+        await message.answer("❌ Введите число:")
+
+
+@dp.callback_query(F.data == "adm_back")
+async def adm_back(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await callback.message.edit_text("⚙️ **Панель управления**", reply_markup=get_admin_kb(await get_settings()), parse_mode="Markdown")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_users_count")
+async def adm_users_count(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute("SELECT COUNT(*), city FROM users GROUP BY city")
+        rows = await cursor.fetchall()
+        total_cursor = await db.execute("SELECT COUNT(*) FROM users")
+        total = (await total_cursor.fetchone())[0]
+    report = f"👥 Всего: **{total}**\n\n" + "\n".join(f"• {c}: **{cnt}**" for cnt, c in rows)
+    await callback.message.answer(report, parse_mode="Markdown")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm_logs")
+async def adm_show_logs(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute("SELECT user_id, action, details, created_at FROM logs ORDER BY id DESC LIMIT 10")
+        logs = await cursor.fetchall()
+    text = "📋 **Последние действия:**\n\n" + "\n".join(f"`[{dt[11:16]}]` ID `{u}`: {a} ({d})" for u, a, d, dt in logs) if logs else "Логов нет."
+    await callback.message.answer(text, parse_mode="Markdown")
+    await callback.answer()
+
+
+# --- ВЕБ-СЕРВЕР И ЗАПУСК ---
+async def handle_ping(request):
+    return web.Response(text="Poizon 010 Bot is running!")
+
+
+async def run_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    while True:
+        await asyncio.sleep(3600)
+
+
+async def main():
+    await init_db()
+    logging.info("База данных инициализирована. Запуск бота и веб-сервера...")
+    asyncio.create_task(run_web_server())
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
