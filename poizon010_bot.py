@@ -720,7 +720,6 @@ async def adm_show_logs(callback: CallbackQuery):
 async def handle_ping(request):
     return web.Response(text="Poizon 010 Bot is running!")
 
-
 async def run_web_server():
     app = web.Application()
     app.router.add_get("/", handle_ping)
@@ -729,13 +728,14 @@ async def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    while True:
-        await asyncio.sleep(3600)
-
+    logging.info(f"Веб-сервер успешно запущен на порту {port}")
+    await asyncio.Event().wait()
 
 async def main():
     await init_db()
-    logging.info("База данных готова. Запуск сервиса...")
+    logging.info("База данных готова. Запуск веб-сервера и бота...")
+    
+    # Запускаем веб-сервер и бота параллельно, чтобы Render не ругался на порты
     asyncio.create_task(run_web_server())
     await dp.start_polling(bot)
 
