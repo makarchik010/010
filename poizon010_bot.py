@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import sys
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -18,9 +19,20 @@ from aiogram.types import (
 import aiosqlite
 from aiohttp import web
 
-BOT_TOKEN = "8816444631:AAEj2JoljUfk2T2pg_VcxFRzlMMDaUINQnU"
-ADMIN_ID = 1681547868  # ВПИШИ СЮДА СВОЙ ЧИСЛОВОЙ ID БЕЗ КАВЫЧЕК
+# Получаем данные из переменных окружения Render
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID_RAW = os.environ.get("ADMIN_ID")
 CHANNEL_URL = "https://t.me/poizonstore010"
+
+if not BOT_TOKEN:
+    logging.critical("ОШИБКА: Переменная BOT_TOKEN не найдена в Environment Variables!")
+    sys.exit(1)
+
+try:
+    ADMIN_ID = int(ADMIN_ID_RAW) if ADMIN_ID_RAW else 0
+except ValueError:
+    logging.error("ADMIN_ID должен быть числом!")
+    ADMIN_ID = 0
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -88,13 +100,11 @@ async def init_db():
 async def log_action(user: User, action: str, details: str = ""):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Формируем читаемый юзернейм
     if user.username:
         user_tag = f"@{user.username} ({user.full_name})"
     else:
         user_tag = f"[{user.full_name}](tg://user?id={user.id})"
 
-    # 1. Запись в базу данных
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
             "INSERT INTO logs (user_id, user_tag, action, details, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -102,8 +112,7 @@ async def log_action(user: User, action: str, details: str = ""):
         )
         await db.commit()
 
-    # 2. Мгновенное уведомление админу в личку (только если кликает клиент, а не админ)
-    if user.id != ADMIN_ID:
+    if user.id != ADMIN_ID and ADMIN_ID != 0:
         action_names = {
             "start": "🚀 Запустил бота",
             "set_city": "📍 Выбрал город",
@@ -151,7 +160,7 @@ def get_main_kb(user_id: int):
         [KeyboardButton(text="📏 Таблица размеров"), KeyboardButton(text="📍 Сменить город")],
         [KeyboardButton(text="📢 Наш канал")]
     ]
-    if user_id == ADMIN_ID:
+    if user_id == ADMIN_ID and ADMIN_ID != 0:
         buttons.append([KeyboardButton(text="👑 Админ-панель")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -409,18 +418,19 @@ async def process_order_size(message: Message, state: FSMContext):
         parse_mode="Markdown"
     )
 
-    order_notification = (
-        f"🔥 **НОВАЯ ЗАЯВКА НА ВЫКУП!**\n\n"
-        f"👤 Клиент: {username} ({user.full_name})\n"
-        f"🆔 ID: `{user.id}`\n"
-        f"🔗 Ссылка / Описание: {link}\n"
-        f"📏 Размер / Параметры: {size}\n"
-        f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-    )
-    try:
-        await bot.send_message(ADMIN_ID, order_notification, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Сбой отправки админу: {e}")
+    if ADMIN_ID != 0:
+        order_notification = (
+            f"🔥 **НОВАЯ ЗАЯВКА НА ВЫКУП!**\n\n"
+            f"👤 Клиент: {username} ({user.full_name})\n"
+            f"🆔 ID: `{user.id}`\n"
+            f"🔗 Ссылка / Описание: {link}\n"
+            f"📏 Размер / Параметры: {size}\n"
+            f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        )
+        try:
+            await bot.send_message(ADMIN_ID, order_notification, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Сбой отправки админу: {e}")
 
 
 # --- ОТКУДА ДОСТАВЛЯЕМ ---
